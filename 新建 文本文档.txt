@@ -1,0 +1,9 @@
+pytorch
+torchvision
+opencv-python
+numpy
+matplotlib
+tqdm
+pywin32
+pyautogui
+keyboard
