@@ -24,6 +24,7 @@ import win32gui
 import win32con
 import gc
 import warnings
+import shutil
 warnings.filterwarnings('ignore')
 
 import tkinter as tk
@@ -46,76 +47,158 @@ CONFIG = {
 # 透明日志窗口类
 ############################################################
 class OverlayLogger:
-    """
-    透明窗口日志显示器。
-    在屏幕左下角打印实时日志，并使用透明窗口覆盖在最上层。
-    """
-    def __init__(self, width=600, height=200):
-        self.root = None
-        self.width = width
-        self.height = height
-        self.log_queue = queue.Queue()
-        self.update_interval = 100  # ms
-        self.stop_event = threading.Event()
-        self.thread = threading.Thread(target=self._run_overlay, daemon=True)
+   """
+   透明窗口日志显示器。
+   在屏幕左下角打印实时日志，并使用透明窗口覆盖在最上层。
+   """
+   def __init__(self, width=600, height=400):
+       self.root = None
+       self.width = width
+       self.height = height
+       self.log_queue = queue.Queue()
+       self.update_interval = 100  # ms
+       self.stop_event = threading.Event()
+       self.thread = threading.Thread(target=self._run_overlay, daemon=True)
 
-    def start(self):
-        self.thread.start()
+   def start(self):
+       """启动日志窗口线程"""
+       self.thread.start()
 
-    def stop(self):
-        self.stop_event.set()
-        if self.root is not None:
-            try:
-                self.root.quit()
-            except:
-                pass
-        self.thread.join()
+   def stop(self):
+       """停止日志窗口"""
+       self.stop_event.set()
+       if self.root is not None:
+           try:
+               self.root.quit()
+           except:
+               pass
+       self.thread.join()
 
-    def add_log(self, text):
-        """
-        向队列中添加一条日志。
-        """
-        self.log_queue.put(text)
+   def add_log(self, text):
+       """
+       向队列中添加一条日志。
+       Args:
+           text: 日志文本内容
+       """
+       self.log_queue.put(text)
 
-    def _run_overlay(self):
-        """
-        启动一个 Tk 窗口，显示透明顶层日志。
-        """
-        self.root = tk.Tk()
-        self.root.title("实时日志")
-        self.root.attributes("-topmost", True)
-        self.root.overrideredirect(True)
+   def clear_log(self):
+       """清空日志显示"""
+       if hasattr(self, 'text_box'):
+           self.text_box.delete(1.0, tk.END)
 
-        # 计算左下角位置
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        x_pos = 0
-        y_pos = screen_height - self.height
+   def _run_overlay(self):
+       """
+       启动一个 Tk 窗口，显示透明顶层日志。
+       """
+       self.root = tk.Tk()
+       self.root.title("场景状态监测")
+       self.root.attributes("-topmost", True)
+       self.root.overrideredirect(True)
 
-        self.root.geometry(f"{self.width}x{self.height}+{x_pos}+{y_pos}")
+       # 计算左下角位置
+       screen_width = self.root.winfo_screenwidth()
+       screen_height = self.root.winfo_screenheight()
+       x_pos = 0
+       y_pos = screen_height - self.height
 
-        # 设置透明
-        self.root.wm_attributes("-alpha", 0.6)
+       self.root.geometry(f"{self.width}x{self.height}+{x_pos}+{y_pos}")
+       self.root.wm_attributes("-alpha", 0.8)
 
-        # 文本框
-        self.text_box = tk.Text(self.root, bg="black", fg="white", font=("Consolas", 10))
-        self.text_box.pack(fill=tk.BOTH, expand=True)
+       # 主框架
+       main_frame = tk.Frame(self.root, bg='black')
+       main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # 定时更新日志
-        self._update_logs()
-        self.root.mainloop()
+       # 标题栏
+       title_frame = tk.Frame(main_frame, bg='#1a1a1a', height=30)
+       title_frame.pack(fill=tk.X)
+       title_frame.pack_propagate(False)
 
-    def _update_logs(self):
-        """
-        周期性从队列中取日志并显示。
-        """
-        while not self.log_queue.empty():
-            log_text = self.log_queue.get()
-            self.text_box.insert(tk.END, log_text + "\n")
-            self.text_box.see(tk.END)
+       title_label = tk.Label(
+           title_frame, 
+           text="实时场景监测", 
+           bg='#1a1a1a',
+           fg='white',
+           font=("Consolas", 10, "bold")
+       )
+       title_label.pack(side=tk.LEFT, padx=10)
 
-        if not self.stop_event.is_set():
-            self.root.after(self.update_interval, self._update_logs)
+       # 文本框
+       self.text_box = tk.Text(
+           main_frame,
+           bg="black",
+           fg="white",
+           font=("Consolas", 10),
+           padx=10,
+           pady=10,
+           wrap=tk.WORD,
+           relief=tk.FLAT
+       )
+       self.text_box.pack(fill=tk.BOTH, expand=True)
+
+       # 滚动条
+       scrollbar = tk.Scrollbar(self.text_box)
+       scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+       self.text_box.config(yscrollcommand=scrollbar.set)
+       scrollbar.config(command=self.text_box.yview)
+
+       # 设置文本标签样式
+       self.text_box.tag_configure("title", foreground="#00ff00")  # 绿色标题
+       self.text_box.tag_configure("warning", foreground="#ff6b6b")  # 红色警告
+       self.text_box.tag_configure("info", foreground="#4dc4ff")    # 蓝色信息
+       self.text_box.tag_configure("highlight", foreground="#ffcb6b")  # 黄色高亮
+       self.text_box.tag_configure("success", foreground="#69f0ae")   # 绿色成功
+
+       # 定时更新日志
+       self._update_logs()
+       
+       # 绑定右键菜单
+       self._create_context_menu()
+       
+       self.root.mainloop()
+
+   def _create_context_menu(self):
+       """创建右键菜单"""
+       self.context_menu = tk.Menu(self.root, tearoff=0, bg='#2d2d2d', fg='white')
+       self.context_menu.add_command(label="清除日志", command=self.clear_log)
+       self.context_menu.add_separator()
+       self.context_menu.add_command(label="关闭窗口", command=self.stop)
+       
+       def show_menu(event):
+           self.context_menu.post(event.x_root, event.y_root)
+       
+       self.text_box.bind("<Button-3>", show_menu)
+
+   def _update_logs(self):
+       """
+       周期性从队列中取日志并显示。
+       """
+       try:
+           while not self.log_queue.empty():
+               log_text = self.log_queue.get_nowait()
+               
+               # 根据日志内容添加不同的样式
+               if "错误" in log_text or "警告" in log_text:
+                   self.text_box.insert(tk.END, log_text + "\n", "warning")
+               elif "成功" in log_text or "完成" in log_text:
+                   self.text_box.insert(tk.END, log_text + "\n", "success")
+               elif "===" in log_text:
+                   self.text_box.insert(tk.END, log_text + "\n", "title")
+               elif ":" in log_text:
+                   self.text_box.insert(tk.END, log_text + "\n", "info")
+               else:
+                   self.text_box.insert(tk.END, log_text + "\n")
+                   
+               self.text_box.see(tk.END)
+               
+               # 限制文本框内容长度
+               if float(self.text_box.index('end')) > 1000:  # 最多保留1000行
+                   self.text_box.delete(1.0, 2.0)
+       except Exception as e:
+           print(f"更新日志出错: {str(e)}")
+
+       if not self.stop_event.is_set():
+           self.root.after(self.update_interval, self._update_logs)
 
 ############################################################
 # 基础环境设置
@@ -188,15 +271,41 @@ monitor = PerformanceMonitor()
 # 资源清理
 ############################################################
 def cleanup():
-    print("\n清理资源...")
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        print("GPU缓存已清理")
-    cv2.destroyAllWindows()
-    print("OpenCV窗口已关闭")
-    gc.collect()
-    print("垃圾回收已执行")
-    print("资源清理完成")
+   """
+   清理资源和临时文件:
+   - 清空GPU缓存
+   - 关闭OpenCV窗口
+   - 删除tmp目录及其内容
+   - 执行垃圾回收
+   """
+   print("\n清理资源...")
+   
+   # 清理GPU缓存
+   if torch.cuda.is_available():
+       torch.cuda.empty_cache()
+       print("GPU缓存已清理")
+   
+   # 关闭OpenCV窗口
+   cv2.destroyAllWindows()
+   print("OpenCV窗口已关闭")
+   
+   # 删除tmp目录
+   tmp_dir = "./tmp"
+   sequences_dir = "./tmp/sequences"
+   try:
+       if os.path.exists(sequences_dir):
+           shutil.rmtree(sequences_dir)
+           print("序列缓存目录已删除")
+       if os.path.exists(tmp_dir):
+           shutil.rmtree(tmp_dir)
+           print("临时目录已删除") 
+   except Exception as e:
+       print(f"删除临时文件失败: {str(e)}")
+       
+   # 垃圾回收
+   gc.collect()
+   print("垃圾回收已执行")
+   print("资源清理完成")
 
 ############################################################
 # GPU 场景检测器
@@ -902,26 +1011,45 @@ class Trainer:
         self.model = model.to(self.device)
         self.train_loader = train_loader
         self.val_loader = val_loader
+        
+        # 优化器设置
         self.optimizer = torch.optim.Adam(
             model.parameters(),
             lr=learning_rate,
             weight_decay=weight_decay
         )
+        
+        # 修正：从正确的模块导入学习率调度器
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, mode='min', factor=0.5, 
             patience=5, verbose=True
         )
-        self.scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
-        self.loss_weights = {
-            'frame': 1.0,
-            'action': 0.1,
-            'temporal': 0.05
-        }
-        self.scheduler = torch.optim.CosineAnnealingLR(
-             self.optimizer, 
-            T_max=num_epochs,
+        
+        # 余弦退火学习率
+        self.cos_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=50,
             eta_min=1e-6
         )
+        
+        # 自动混合精度训练
+        self.scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
+        
+        # 损失权重配置
+        self.loss_weights = {
+            'frame': 1.0,       # 帧预测损失权重
+            'action': 0.1,      # 动作平滑损失权重
+            'temporal': 0.05    # 时序一致性损失权重
+        }
+        
+        # 训练状态记录
+        self.train_history = {
+            'epoch_losses': [],
+            'val_losses': [],
+            'learning_rates': [],
+            'best_loss': float('inf'),
+        }
+        
         print(f"\n训练器初始化完成:")
         print(f"- 学习率: {learning_rate}")
         print(f"- 权重衰减: {weight_decay}")
@@ -930,8 +1058,8 @@ class Trainer:
             print(f"- GPU型号: {torch.cuda.get_device_name(0)}")
             print(f"- GPU内存: {torch.cuda.get_device_properties(0).total_memory/1024**3:.1f}GB")
 
-
-    def train_epoch(self, epoch):
+    def train_epoch(self, epoch, is_increment=False):
+        """训练一个完整的epoch"""
         self.model.train()
         total_loss = 0
         num_batches = len(self.train_loader)
@@ -941,53 +1069,82 @@ class Trainer:
             try:
                 frames = frames.to(self.device)
                 target = target.to(self.device)
-                loss = self._train_step(frames, target)
+                loss = self._train_step(frames, target, is_increment)
                 total_loss += loss
+                
+                # 更新进度条信息
                 progress.set_postfix({
                     'loss': f"{loss:.4f}",
                     'avg_loss': f"{total_loss/(batch_idx+1):.4f}",
                     'lr': f"{self.optimizer.param_groups[0]['lr']:.6f}"
                 })
+                
+                # 定期执行垃圾回收
+                if batch_idx % 100 == 0:
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    
             except Exception as e:
                 print(f"\n批次 {batch_idx} 训练错误: {str(e)}")
                 import traceback
                 traceback.print_exc()
                 continue
-        return total_loss / num_batches
+                
+        epoch_loss = total_loss / num_batches
+        self.train_history['epoch_losses'].append(epoch_loss)
+        return epoch_loss
     
-    def _train_step(self, frames, target):
+    def _train_step(self, frames, target, is_increment=False):
+        """执行单个训练步骤"""
         self.optimizer.zero_grad()
+        
         with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+            # 前向传播
             actions, pred_frame = self.model(frames)
+            
+            # 计算各项损失
             frame_loss = F.mse_loss(pred_frame, target.squeeze(1))
             action_smooth_loss = self._compute_action_smoothness(actions)
             temporal_loss = self._compute_temporal_consistency(frames, pred_frame)
-            loss = (self.loss_weights['frame'] * frame_loss 
-                    + self.loss_weights['action'] * action_smooth_loss
-                    + self.loss_weights['temporal'] * temporal_loss)
+            
+            # 增量训练时调整损失权重
+            if is_increment:
+                self.loss_weights['frame'] *= 0.8  # 降低帧预测损失权重
+                self.loss_weights['temporal'] *= 1.2  # 增加时序一致性权重
+            
+            # 组合总损失
+            loss = (self.loss_weights['frame'] * frame_loss + 
+                   self.loss_weights['action'] * action_smooth_loss +
+                   self.loss_weights['temporal'] * temporal_loss)
+        
+        # 反向传播
         self.scaler.scale(loss).backward()
+        
+        # 梯度裁剪
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        
         self.scaler.step(self.optimizer)
         self.scaler.update()
+        
         return loss.item()
     
     def _compute_action_smoothness(self, actions):
+        """计算动作平滑度损失"""
         return torch.mean(torch.abs(actions))
     
     def _compute_temporal_consistency(self, frames, pred_frame):
-        last_real_frame = frames[:, -1]  
+        """计算时序一致性损失"""
+        last_real_frame = frames[:, -1]
         return F.mse_loss(pred_frame, last_real_frame)
-    def _augment_sequence(self, sequence):
-        augmented = sequence.copy()
-        augmented = adjust_brightness(augmented, random.uniform(0.8, 1.2))
-        augmented = adjust_contrast(augmented, random.uniform(0.8, 1.2))
-        if random.random() < 0.5:
-            augmented = augmented[:, :, ::-1]
-        return augmented
+    
     def validate(self):
+        """验证模型性能"""
         if self.val_loader is None:
             return None
+            
         self.model.eval()
         total_loss = 0
+        
         with torch.no_grad():
             for frames, target in tqdm(self.val_loader, desc="验证"):
                 try:
@@ -999,13 +1156,123 @@ class Trainer:
                 except Exception as e:
                     print(f"验证错误: {str(e)}")
                     continue
-        return total_loss / len(self.val_loader)
+                    
+        val_loss = total_loss / len(self.val_loader)
+        self.train_history['val_losses'].append(val_loss)
+        
+        # 更新学习率
+        self.scheduler.step(val_loss)
+        self.train_history['learning_rates'].append(
+            self.optimizer.param_groups[0]['lr']
+        )
+        
+        # 更新最佳模型
+        if val_loss < self.train_history['best_loss']:
+            self.train_history['best_loss'] = val_loss
+            return True  # 标记需要保存检查点
+        return False
+    
+    def train_incremental(self, video_batches, epochs_per_batch=5, save_dir="./models"):
+        """增量训练入口函数"""
+        print("\n开始增量训练...")
+        for batch_idx, video_batch in enumerate(video_batches):
+            print(f"\n处理第 {batch_idx + 1}/{len(video_batches)} 批视频...")
+            
+            # 创建当前批次的数据集和加载器
+            try:
+                current_dataset = EnhancedDataset(
+                    video_batch,
+                    sequence_length=CONFIG['SEQUENCE_LENGTH'],
+                    frame_size=CONFIG['FRAME_SIZE']
+                )
+                
+                current_loader = DataLoader(
+                    current_dataset,
+                    batch_size=CONFIG['BATCH_SIZE'],
+                    shuffle=True,
+                    num_workers=CONFIG['NUM_WORKERS'],
+                    pin_memory=True
+                )
+                
+                # 更新训练器的数据加载器
+                self.train_loader = current_loader
+                
+                # 训练当前批次
+                for epoch in range(epochs_per_batch):
+                    print(f"\n===> 批次 {batch_idx + 1}, Epoch {epoch + 1}/{epochs_per_batch}")
+                    train_loss = self.train_epoch(epoch, is_increment=True)
+                    
+                    # 执行验证
+                    if self.val_loader:
+                        is_best = self.validate()
+                        if is_best:
+                            save_model(
+                                self.model,
+                                os.path.join(save_dir, f'best_model_batch_{batch_idx}.pth'),
+                                self.optimizer,
+                                epoch,
+                                train_loss
+                            )
+                    
+                    # 保存阶段性检查点
+                    if (epoch + 1) % 2 == 0:
+                        save_model(
+                            self.model,
+                            os.path.join(save_dir, f'checkpoint_batch_{batch_idx}_epoch_{epoch+1}.pth'),
+                            self.optimizer,
+                            epoch,
+                            train_loss
+                        )
+                
+                # 清理当前批次的数据集
+                current_dataset.cleanup()
+                
+            except Exception as e:
+                print(f"处理批次 {batch_idx} 时发生错误: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        print("\n增量训练完成!")
+        
+    def plot_training_history(self):
+        """绘制训练历史"""
+        try:
+            import matplotlib.pyplot as plt
+            
+            plt.figure(figsize=(15, 5))
+            
+            # 损失曲线
+            plt.subplot(1, 2, 1)
+            plt.plot(self.train_history['epoch_losses'], label='Training Loss')
+            if self.train_history['val_losses']:
+                plt.plot(self.train_history['val_losses'], label='Validation Loss')
+            plt.title('Loss History')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.legend()
+            
+            # 学习率曲线
+            plt.subplot(1, 2, 2)
+            plt.plot(self.train_history['learning_rates'])
+            plt.title('Learning Rate History')
+            plt.xlabel('Validation Steps')
+            plt.ylabel('Learning Rate')
+            
+            plt.tight_layout()
+            plt.savefig('./visualizations/training_history.png')
+            plt.close()
+            
+            print(f"\n训练历史图表已保存至: ./visualizations/training_history.png")
+            
+        except Exception as e:
+            print(f"绘制训练历史出错: {str(e)}")
 
 ############################################################
 # 训练流程
 ############################################################
 def train_model(model, train_dataset, val_dataset=None, 
-                num_epochs=2, batch_size=32, save_dir="./models"):
+                num_epochs=5, batch_size=32, save_dir="./models"):
     print("\n开始训练...")
     train_loader = DataLoader(
         train_dataset,
@@ -1020,7 +1287,7 @@ def train_model(model, train_dataset, val_dataset=None,
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=4,
+            num_workers=16,
             pin_memory=True
         )
     trainer = Trainer(model, train_loader, val_loader)
@@ -1071,30 +1338,87 @@ def train_model(model, train_dataset, val_dataset=None,
 # 推理功能
 ############################################################
 def start_inference_realtime(model, logger=None):
+    """实时推理并在透明窗口中可视化显示场景状态"""
     print("\n开始实时推理...\n按 'q' 或 'esc' 退出")
     model.eval()
+    
+    # 场景状态映射
+    scene_states = {
+        'MENU': {'name': '菜单界面', 'color': '\033[94m'},  # 蓝色
+        'MAP': {'name': '地图界面', 'color': '\033[92m'},   # 绿色
+        'DIALOG': {'name': '对话状态', 'color': '\033[93m'}, # 黄色
+        'LOADING': {'name': '加载中', 'color': '\033[95m'},  # 紫色
+        'COMBAT': {'name': '战斗状态', 'color': '\033[91m'}, # 红色
+        'SWIMMING': {'name': '游泳中', 'color': '\033[96m'}, # 青色
+        'FLYING': {'name': '飞行中', 'color': '\033[97m'},   # 白色
+        'CLIMBING': {'name': '攀爬中', 'color': '\033[90m'}  # 灰色
+    }
+    
+    THRESHOLD = 0.5
     while True:
         if keyboard.is_pressed('q') or keyboard.is_pressed('esc'):
             print("用户退出实时推理")
             break
         
-        screenshot = pyautogui.screenshot()
-        frame = np.array(screenshot)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = cv2.resize(frame, CONFIG['FRAME_SIZE'])
-        frame = frame.astype(np.float32) / 255.0
-        frame_tensor = torch.from_numpy(frame).permute(2,0,1).unsqueeze(0).to(CONFIG['DEVICE'])
-        
-        with torch.no_grad():
-            frame_tensor = frame_tensor.unsqueeze(1)
-            actions, pred_frame = model(frame_tensor)
-        
-        actions_np = actions.squeeze(0).cpu().numpy()
-        msg = f"动作向量: {actions_np.round(2)}"
-        print(msg)
-        if logger:
-            logger.add_log(msg)
-        time.sleep(0.5)
+        try:
+            # 截图和预处理
+            screenshot = pyautogui.screenshot()
+            frame = np.array(screenshot)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, CONFIG['FRAME_SIZE'])
+            frame = frame.astype(np.float32) / 255.0
+            frame_tensor = torch.from_numpy(frame).permute(2,0,1).unsqueeze(0).unsqueeze(1).to(CONFIG['DEVICE'])
+            
+            # 模型推理
+            with torch.no_grad():
+                actions, pred_frame = model(frame_tensor)
+            
+            actions_np = actions.squeeze(0).cpu().numpy()
+            
+            # 构建可视化日志
+            log_lines = []
+            log_lines.append("==== 场景状态监测 ====")
+            log_lines.append(f"时间: {datetime.now().strftime('%H:%M:%S')}")
+            log_lines.append("-" * 30)
+            
+            # 添加活跃状态
+            active_states = []
+            for i, (state, config) in enumerate(scene_states.items()):
+                prob = actions_np[i]
+                if prob > THRESHOLD:
+                    active_states.append(f"{config['name']}({prob:.2f})")
+            
+            if active_states:
+                log_lines.append("当前激活状态:")
+                for state in active_states:
+                    log_lines.append(f"➤ {state}")
+            else:
+                log_lines.append("⚠ 未检测到明确状态")
+            
+            log_lines.append("-" * 30)
+            log_lines.append("详细状态概率:")
+            
+            # 添加所有状态概率
+            for i, (state, config) in enumerate(scene_states.items()):
+                prob = actions_np[i]
+                bar_length = int(prob * 20)  # 概率条长度
+                bar = "█" * bar_length + "░" * (20 - bar_length)
+                log_lines.append(f"{config['name']}: {bar} {prob:.2f}")
+            
+            # 更新透明窗口日志
+            if logger:
+                logger.text_box.delete(1.0, tk.END)  # 清除旧内容
+                logger.text_box.insert(tk.END, "\n".join(log_lines))
+            
+            time.sleep(0.5)
+            
+        except Exception as e:
+            error_msg = f"推理错误: {str(e)}"
+            print(error_msg)
+            if logger:
+                logger.add_log(error_msg)
+            time.sleep(1)
+            continue
 
 def start_inference_video(model, video_path, logger=None):
     print(f"\n开始视频文件推理: {video_path}")
@@ -1453,30 +1777,86 @@ def main():
             CONFIG['GPU_MEMORY_FRACTION'] = 0.4
         
         setup_environment()
-        model = create_model()
         
-        # 初始化透明日志窗口
+        # 检查已有模型
+        model_path = "./models/final_model.pth"
+        if os.path.exists(model_path):
+            print(f"\n发现已有模型: {model_path}")
+            model, checkpoint = load_model(model_path)
+            if model is None:
+                print("加载已有模型失败，创建新模型...")
+                model = create_model()
+            else:
+                print("成功加载已有模型，将使用增量训练")
+        else:
+            print("\n未发现已有模型，创建新模型...")
+            model = create_model()
+        
+        # 初始化日志记录器
         logger = OverlayLogger()
-        # 在需要的模式下再开启
-        # (或者也可以统一在这里 logger.start()，然后在程序结束时 logger.stop())
         
         if mode == 1:
-            dataset = setup_video_training()
-            if dataset is None:
-                print("\n错误: 无法创建数据集")
+            # 视频文件训练模式
+            video_dir = "./videos"
+            if not os.path.exists(video_dir):
+                print(f"创建视频文件夹: {video_dir}")
+                os.makedirs(video_dir)
+            
+            video_files = glob(os.path.join(video_dir, "*.*"))
+            if not video_files:
+                print(f"\n错误: 未找到视频文件，请将训练视频放入 {video_dir} 文件夹")
                 return
-            train_model(
-                model=model,
-                train_dataset=dataset,
-                val_dataset=None,
-                num_epochs=5,
-                batch_size=CONFIG['BATCH_SIZE'],
-                save_dir="./models"
-            )
+            
+            try:
+                dataset = EnhancedDataset(
+                    video_folder=video_dir,
+                    sequence_length=CONFIG['SEQUENCE_LENGTH'],
+                    frame_size=CONFIG['FRAME_SIZE']
+                )
+                
+                train_loader = DataLoader(
+                    dataset,
+                    batch_size=CONFIG['BATCH_SIZE'],
+                    shuffle=True,
+                    num_workers=CONFIG['NUM_WORKERS'],
+                    pin_memory=True
+                )
+                
+                # 创建训练器
+                trainer = Trainer(model, train_loader)
+                
+                # 执行训练
+                print("\n开始训练...")
+                for epoch in range(5):  # 5个epoch
+                    trainer.train_epoch(epoch)
+                    trainer.validate()
+                
+                # 绘制训练历史
+                trainer.plot_training_history()
+                
+                # 保存最终模型
+                save_model(
+                    model,
+                    "./models/final_model.pth",
+                    trainer.optimizer,
+                    epoch=5,
+                    loss=trainer.train_history['epoch_losses'][-1]
+                )
+                
+                print("\n训练完成!")
+                
+            except Exception as e:
+                print(f"\n训练过程出错: {str(e)}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                # 清理数据集
+                if 'dataset' in locals():
+                    dataset.cleanup()
         
         elif mode == 2:
             # 实时截屏训练
-            logger.start()  # 如果想在训练中也实时显示日志，可以在这里加日志
+            logger.start()
             realtime_dataset, train_loader = setup_realtime_training()
             stop_event = threading.Event()
             capture_thread = threading.Thread(
@@ -1504,22 +1884,12 @@ def main():
         
         elif mode == 3:
             # 实时推理
-            model_path = "./models/final_model.pth"
-            if os.path.exists(model_path):
-                loaded_model, _ = load_model(model_path, model)
-                if loaded_model is not None:
-                    model = loaded_model
             logger.start()
             start_inference_realtime(model, logger=logger)
             logger.stop()
         
         elif mode == 4:
             # 视频文件推理
-            model_path = "./models/final_model.pth"
-            if os.path.exists(model_path):
-                loaded_model, _ = load_model(model_path, model)
-                if loaded_model is not None:
-                    model = loaded_model
             video_files = glob("./videos/*.*")
             if not video_files:
                 print("\n错误: 未找到视频文件")
@@ -1542,22 +1912,12 @@ def main():
         
         elif mode == 5:
             # 自动操控游戏并自训练
-            model_path = "./models/final_model.pth"
-            if os.path.exists(model_path):
-                loaded_model, _ = load_model(model_path, model)
-                if loaded_model is not None:
-                    model = loaded_model
             logger.start()
             start_self_training(model, logger=logger)
             logger.stop()
         
         else:
             # 功能6：无限向前走 + 避障
-            model_path = "./models/final_model.pth"
-            if os.path.exists(model_path):
-                loaded_model, _ = load_model(model_path, model)
-                if loaded_model is not None:
-                    model = loaded_model
             logger.start()
             infinite_forward_and_avoid(model, logger=logger)
             logger.stop()
